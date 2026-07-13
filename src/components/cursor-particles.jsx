@@ -41,6 +41,8 @@ const DEFAULT_PARAMS = {
   falloff: 320,        // px — attraction fades to zero beyond this particle distance
   friction: 0.025,     // velocity damping per frame-ish
   maxSpeed: 480,       // px/s clamp
+  centerGravity: 0,    // spring pull toward canvas center (0 = off, existing behavior)
+  multiplier: 1,       // particles spawned per cursor
 };
 
 export default function App() {
@@ -68,22 +70,29 @@ export default function App() {
   const setParam = (key, value) => {
     paramsRef.current[key] = value;
     setParams((p) => ({ ...p, [key]: value }));
+    if (key === "multiplier") syncParticles();
   };
 
   const syncParticles = useCallback(() => {
     const canvas = particleCanvasRef.current;
     const n = recordingsRef.current.length;
-    const parts = particlesRef.current;
+    const M = Math.max(1, Math.round(paramsRef.current.multiplier));
     const w = canvas ? canvas.clientWidth : 300;
     const h = canvas ? canvas.clientHeight : 300;
-    while (parts.length < n) {
-      parts.push({
-        x: w * (0.2 + 0.6 * Math.random()),
-        y: h * (0.2 + 0.6 * Math.random()),
-        vx: 0, vy: 0,
-      });
+    const old = particlesRef.current;
+    const next = [];
+    for (let i = 0; i < n; i++) {
+      const mine = old.filter((p) => p.cursorIdx === i).slice(0, M);
+      while (mine.length < M) {
+        mine.push({
+          x: w * (0.2 + 0.6 * Math.random()),
+          y: h * (0.2 + 0.6 * Math.random()),
+          vx: 0, vy: 0, cursorIdx: i,
+        });
+      }
+      next.push(...mine);
     }
-    parts.length = n;
+    particlesRef.current = next;
   }, []);
 
   // ---------------- recording control ----------------
@@ -271,21 +280,29 @@ export default function App() {
         const [ctx, w, h] = resize(pc);
         const parts = particlesRef.current;
 
-        // pairwise forces: coefficient from cursor proximity
+        // coefficient matrix from cursor proximity (same cursor → dist 0 → max attract)
+        const nCur = cursors.length;
+        const coeffM = [];
+        for (let i = 0; i < nCur; i++) {
+          coeffM.push([]);
+          for (let j = 0; j < nCur; j++) {
+            const ci = cursors[i], cj = cursors[j];
+            if (!ci || !cj) { coeffM[i].push(null); continue; }
+            const cursorDist = i === j ? 0 : Math.hypot(ci.x - cj.x, ci.y - cj.y);
+            let closeness = 1 - cursorDist / Math.max(0.01, P.proximityRange);
+            closeness = Math.max(-1, Math.min(1, closeness));
+            coeffM[i].push(P.forceScale * closeness * (P.invert ? -1 : 1));
+          }
+        }
+
+        // pairwise forces between particles, coefficient from their cursors
         for (let i = 0; i < parts.length; i++) {
           for (let j = 0; j < parts.length; j++) {
             if (i === j) continue;
-            const ci = cursors[i], cj = cursors[j];
-            if (!ci || !cj) continue;
-
-            const cdx = ci.x - cj.x, cdy = ci.y - cj.y;
-            const cursorDist = Math.hypot(cdx, cdy); // 0 .. ~1.41
-            // closeness in [-1, 1]: +1 when cursors overlap, 0 at proximityRange, → -1 far
-            let closeness = 1 - cursorDist / Math.max(0.01, P.proximityRange);
-            closeness = Math.max(-1, Math.min(1, closeness));
-            let coeff = P.forceScale * closeness * (P.invert ? -1 : 1);
-
             const a = parts[i], b = parts[j];
+            const coeff = coeffM[a.cursorIdx]?.[b.cursorIdx];
+            if (coeff == null) continue;
+
             let dx = b.x - a.x, dy = b.y - a.y;
             let r = Math.hypot(dx, dy) || 0.001;
             const ux = dx / r, uy = dy / r;
@@ -309,8 +326,13 @@ export default function App() {
           }
         }
 
-        // integrate, damp, clamp, bounce
+        // integrate, center gravity, damp, clamp, bounce
+        const cx = w / 2, cy = h / 2;
         for (const p of parts) {
+          if (P.centerGravity > 0) {
+            p.vx += (cx - p.x) * P.centerGravity * dt;
+            p.vy += (cy - p.y) * P.centerGravity * dt;
+          }
           p.vx *= 1 - P.friction;
           p.vy *= 1 - P.friction;
           const s = Math.hypot(p.vx, p.vy);
@@ -324,10 +346,10 @@ export default function App() {
         }
 
         ctx.clearRect(0, 0, w, h);
-        parts.forEach((p, i) => {
+        parts.forEach((p) => {
           ctx.beginPath();
           ctx.arc(p.x, p.y, 6, 0, Math.PI * 2);
-          ctx.fillStyle = colorFor(i, 0.95);
+          ctx.fillStyle = colorFor(p.cursorIdx, 0.95);
           ctx.fill();
         });
       }
@@ -421,6 +443,8 @@ export default function App() {
             {slider("falloff", "falloff", 40, 500, 5, (v) => `${v}px`)}
             {slider("friction", "friction", 0, 0.3, 0.005, (v) => v.toFixed(3))}
             {slider("max speed", "maxSpeed", 50, 1000, 10)}
+            {slider("center gravity", "centerGravity", 0, 4, 0.05, (v) => v.toFixed(2))}
+            {slider("particles per cursor", "multiplier", 1, 12, 1, (v) => `×${v}`)}
             <label style={{ ...styles.sliderLabel, flexDirection: "row", alignItems: "center", gap: 8 }}>
               <input
                 type="checkbox"
