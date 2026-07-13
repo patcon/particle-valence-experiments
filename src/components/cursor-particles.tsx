@@ -1,4 +1,4 @@
-import { useRef, useState, useEffect, useCallback } from "react";
+import { useRef, useState, useEffect, useCallback, type ChangeEvent, type CSSProperties } from "react";
 
 // ---------------------------------------------------------------
 // CursorField + ParticleField
@@ -13,11 +13,48 @@ import { useRef, useState, useEffect, useCallback } from "react";
 //  resize and export cleanly across screen sizes.]
 // ---------------------------------------------------------------
 
+interface Point {
+  x: number;
+  y: number;
+  t: number;
+}
+
+interface Recording {
+  points: Point[];
+  duration: number;
+  _idx?: number;
+}
+
+interface LiveRecording {
+  points: Point[];
+  startedAt: number;
+}
+
+interface Particle {
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  cursorIdx: number;
+}
+
+interface Params {
+  forceScale: number;
+  proximityRange: number;
+  invert: boolean;
+  coreRadius: number;
+  falloff: number;
+  friction: number;
+  maxSpeed: number;
+  centerGravity: number;
+  multiplier: number;
+}
+
 const HUES = [165, 25, 210, 330, 60, 275, 105, 0, 190, 45, 300, 135];
-const colorFor = (i, a = 1) => `hsla(${HUES[i % HUES.length]}, 85%, 62%, ${a})`;
+const colorFor = (i: number, a = 1) => `hsla(${HUES[i % HUES.length]}, 85%, 62%, ${a})`;
 
 // position of a recording's cursor at loop-time tau (ms)
-function sampleRecording(rec, tau) {
+function sampleRecording(rec: Recording, tau: number): Point | null {
   const pts = rec.points;
   if (pts.length === 0) return null;
   if (pts.length === 1) return pts[0];
@@ -30,10 +67,10 @@ function sampleRecording(rec, tau) {
   const a = pts[i], b = pts[i + 1];
   const span = b.t - a.t || 1;
   const f = Math.min(1, Math.max(0, (t - a.t) / span));
-  return { x: a.x + (b.x - a.x) * f, y: a.y + (b.y - a.y) * f };
+  return { x: a.x + (b.x - a.x) * f, y: a.y + (b.y - a.y) * f, t };
 }
 
-const DEFAULT_PARAMS = {
+const DEFAULT_PARAMS: Params = {
   forceScale: 180,     // overall force strength
   proximityRange: 0.4, // cursor distance (normalized) where attract flips to repel
   invert: false,       // false: close cursors attract, far cursors repel; true: flipped
@@ -46,28 +83,28 @@ const DEFAULT_PARAMS = {
 };
 
 export default function App() {
-  const cursorCanvasRef = useRef(null);
-  const particleCanvasRef = useRef(null);
+  const cursorCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const particleCanvasRef = useRef<HTMLCanvasElement | null>(null);
 
   // --- mutable sim state (refs so the RAF loop never resubscribes) ---
-  const recordingsRef = useRef([]);        // committed recordings
-  const liveRef = useRef(null);            // {points, startedAt} while recording
-  const tauRef = useRef(0);                // virtual playback clock (ms), advances at `rate`
-  const rateRef = useRef(1);               // playback rate: 1, 1/2, 1/4, 1/8
-  const particlesRef = useRef([]);         // {x, y, vx, vy} in particle-canvas px
-  const paramsRef = useRef({ ...DEFAULT_PARAMS });
+  const recordingsRef = useRef<Recording[]>([]);        // committed recordings
+  const liveRef = useRef<LiveRecording | null>(null);   // {points, startedAt} while recording
+  const tauRef = useRef(0);                             // virtual playback clock (ms), advances at `rate`
+  const rateRef = useRef(1);                            // playback rate: 1, 1/2, 1/4, 1/8
+  const particlesRef = useRef<Particle[]>([]);          // {x, y, vx, vy} in particle-canvas px
+  const paramsRef = useRef<Params>({ ...DEFAULT_PARAMS });
   const pointerRef = useRef({ x: 0.5, y: 0.5, inside: false });
 
   // --- UI state ---
   const [recCount, setRecCount] = useState(0);
   const [isRecording, setIsRecording] = useState(false);
-  const [params, setParams] = useState({ ...DEFAULT_PARAMS });
+  const [params, setParams] = useState<Params>({ ...DEFAULT_PARAMS });
   const [rate, setRate] = useState(1);
-  const fileInputRef = useRef(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
-  const setPlaybackRate = (r) => { rateRef.current = r; setRate(r); };
+  const setPlaybackRate = (r: number) => { rateRef.current = r; setRate(r); };
 
-  const setParam = (key, value) => {
+  const setParam = <K extends keyof Params>(key: K, value: Params[K]) => {
     paramsRef.current[key] = value;
     setParams((p) => ({ ...p, [key]: value }));
     if (key === "multiplier") syncParticles();
@@ -80,7 +117,7 @@ export default function App() {
     const w = canvas ? canvas.clientWidth : 300;
     const h = canvas ? canvas.clientHeight : 300;
     const old = particlesRef.current;
-    const next = [];
+    const next: Particle[] = [];
     for (let i = 0; i < n; i++) {
       const mine = old.filter((p) => p.cursorIdx === i).slice(0, M);
       while (mine.length < M) {
@@ -128,7 +165,7 @@ export default function App() {
     const canvas = cursorCanvasRef.current;
     if (!canvas) return;
 
-    const norm = (e) => {
+    const norm = (e: PointerEvent) => {
       const r = canvas.getBoundingClientRect();
       return {
         x: Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)),
@@ -136,14 +173,14 @@ export default function App() {
       };
     };
 
-    const record = (e) => {
+    const record = (e: PointerEvent) => {
       const live = liveRef.current;
       if (!live) return;
       const { x, y } = norm(e);
       live.points.push({ x, y, t: performance.now() - live.startedAt });
     };
 
-    const onDown = (e) => {
+    const onDown = (e: PointerEvent) => {
       e.preventDefault();
       canvas.setPointerCapture?.(e.pointerId);
       const p = norm(e);
@@ -159,13 +196,13 @@ export default function App() {
       }
     };
 
-    const onMove = (e) => {
+    const onMove = (e: PointerEvent) => {
       const p = norm(e);
       pointerRef.current = { ...p, inside: true };
       record(e);
     };
 
-    const onUp = (e) => {
+    const onUp = (e: PointerEvent) => {
       if ((e.pointerType === "touch" || e.pointerType === "pen") && liveRef.current) {
         record(e);
         stopRecording();
@@ -190,22 +227,22 @@ export default function App() {
 
   // ---------------- main RAF loop ----------------
   useEffect(() => {
-    let raf;
+    let raf: number;
     let last = performance.now();
 
-    const resize = (canvas) => {
+    const resize = (canvas: HTMLCanvasElement): [CanvasRenderingContext2D, number, number] => {
       const dpr = window.devicePixelRatio || 1;
       const w = canvas.clientWidth, h = canvas.clientHeight;
       if (canvas.width !== w * dpr || canvas.height !== h * dpr) {
         canvas.width = w * dpr;
         canvas.height = h * dpr;
       }
-      const ctx = canvas.getContext("2d");
+      const ctx = canvas.getContext("2d")!;
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       return [ctx, w, h];
     };
 
-    const frame = (now) => {
+    const frame = (now: number) => {
       const dt = Math.min(0.05, (now - last) / 1000);
       last = now;
       const recs = recordingsRef.current;
@@ -282,7 +319,7 @@ export default function App() {
 
         // coefficient matrix from cursor proximity (same cursor → dist 0 → max attract)
         const nCur = cursors.length;
-        const coeffM = [];
+        const coeffM: (number | null)[][] = [];
         for (let i = 0; i < nCur; i++) {
           coeffM.push([]);
           for (let j = 0; j < nCur; j++) {
@@ -303,11 +340,11 @@ export default function App() {
             const coeff = coeffM[a.cursorIdx]?.[b.cursorIdx];
             if (coeff == null) continue;
 
-            let dx = b.x - a.x, dy = b.y - a.y;
-            let r = Math.hypot(dx, dy) || 0.001;
+            const dx = b.x - a.x, dy = b.y - a.y;
+            const r = Math.hypot(dx, dy) || 0.001;
             const ux = dx / r, uy = dy / r;
 
-            let f;
+            let f: number;
             if (r < P.coreRadius) {
               // hard core repulsion regardless of coefficient
               f = -P.forceScale * 2 * (1 - r / P.coreRadius);
@@ -380,15 +417,15 @@ export default function App() {
     URL.revokeObjectURL(url);
   };
 
-  const importJSON = (e) => {
+  const importJSON = (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
     const reader = new FileReader();
     reader.onload = () => {
       try {
-        const data = JSON.parse(reader.result);
-        const recs = (data.recordings || []).filter(
-          (r) => Array.isArray(r.points) && r.points.length > 1 && r.duration > 0
+        const data = JSON.parse(reader.result as string);
+        const recs: Recording[] = (data.recordings || []).filter(
+          (r: Recording) => Array.isArray(r.points) && r.points.length > 1 && r.duration > 0
         );
         recordingsRef.current = recs.map((r) => ({ ...r, _idx: 0 }));
         tauRef.current = 0;
@@ -404,15 +441,22 @@ export default function App() {
   };
 
   // ---------------- layout ----------------
-  const slider = (label, key, min, max, step, fmt = (v) => v) => (
+  const slider = (
+    label: string,
+    key: keyof Params & string,
+    min: number,
+    max: number,
+    step: number,
+    fmt: (v: number) => string | number = (v) => v
+  ) => (
     <label style={styles.sliderLabel} key={key}>
       <span style={styles.sliderText}>
-        {label} <b>{fmt(params[key])}</b>
+        {label} <b>{fmt(params[key] as number)}</b>
       </span>
       <input
         type="range" min={min} max={max} step={step}
-        value={params[key]}
-        onChange={(ev) => setParam(key, parseFloat(ev.target.value))}
+        value={params[key] as number}
+        onChange={(ev) => setParam(key, parseFloat(ev.target.value) as Params[typeof key])}
         style={{ width: "100%" }}
       />
     </label>
@@ -527,4 +571,4 @@ const styles = {
   },
   sliderLabel: { display: "flex", flexDirection: "column", gap: 2 },
   sliderText: { fontSize: 11, opacity: 0.8 },
-};
+} as const satisfies Record<string, CSSProperties>;
