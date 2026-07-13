@@ -34,13 +34,13 @@ function sampleRecording(rec, tau) {
 }
 
 const DEFAULT_PARAMS = {
-  forceScale: 60,      // overall force strength
-  proximityRange: 0.5, // cursor distance (normalized) at which force crosses zero
-  invert: false,       // false: close cursors attract particles; true: close repels
-  coreRadius: 18,      // px — inside this, particles always repel (personal space)
-  falloff: 160,        // px — force fades to zero beyond this particle distance
-  friction: 0.08,      // velocity damping per frame-ish
-  maxSpeed: 300,       // px/s clamp
+  forceScale: 180,     // overall force strength
+  proximityRange: 0.4, // cursor distance (normalized) where attract flips to repel
+  invert: false,       // false: close cursors attract, far cursors repel; true: flipped
+  coreRadius: 22,      // px — inside this, particles always repel (personal space)
+  falloff: 320,        // px — attraction fades to zero beyond this particle distance
+  friction: 0.025,     // velocity damping per frame-ish
+  maxSpeed: 480,       // px/s clamp
 };
 
 export default function App() {
@@ -50,7 +50,8 @@ export default function App() {
   // --- mutable sim state (refs so the RAF loop never resubscribes) ---
   const recordingsRef = useRef([]);        // committed recordings
   const liveRef = useRef(null);            // {points, startedAt} while recording
-  const playbackStartRef = useRef(performance.now());
+  const tauRef = useRef(0);                // virtual playback clock (ms), advances at `rate`
+  const rateRef = useRef(1);               // playback rate: 1, 1/2, 1/4, 1/8
   const particlesRef = useRef([]);         // {x, y, vx, vy} in particle-canvas px
   const paramsRef = useRef({ ...DEFAULT_PARAMS });
   const pointerRef = useRef({ x: 0.5, y: 0.5, inside: false });
@@ -59,7 +60,10 @@ export default function App() {
   const [recCount, setRecCount] = useState(0);
   const [isRecording, setIsRecording] = useState(false);
   const [params, setParams] = useState({ ...DEFAULT_PARAMS });
+  const [rate, setRate] = useState(1);
   const fileInputRef = useRef(null);
+
+  const setPlaybackRate = (r) => { rateRef.current = r; setRate(r); };
 
   const setParam = (key, value) => {
     paramsRef.current[key] = value;
@@ -85,7 +89,7 @@ export default function App() {
   // ---------------- recording control ----------------
   const startRecording = useCallback(() => {
     liveRef.current = { points: [], startedAt: performance.now() };
-    playbackStartRef.current = performance.now(); // reset loops so we record against them
+    tauRef.current = 0; // reset loops so we record against them from their start
     recordingsRef.current.forEach((r) => (r._idx = 0));
     setIsRecording(true);
   }, []);
@@ -197,7 +201,9 @@ export default function App() {
       last = now;
       const recs = recordingsRef.current;
       const P = paramsRef.current;
-      const tau = now - playbackStartRef.current;
+      // playback rate slows cursor replay only; sim physics still runs at real dt
+      tauRef.current += dt * 1000 * rateRef.current;
+      const tau = tauRef.current;
 
       // current cursor positions (normalized)
       const cursors = recs.map((r) => sampleRecording(r, tau));
@@ -288,10 +294,15 @@ export default function App() {
             if (r < P.coreRadius) {
               // hard core repulsion regardless of coefficient
               f = -P.forceScale * 2 * (1 - r / P.coreRadius);
-            } else if (r < P.falloff) {
-              f = coeff * (1 - (r - P.coreRadius) / (P.falloff - P.coreRadius));
+            } else if (coeff >= 0) {
+              // attraction: peaks just outside the core, fades by `falloff`
+              const t = (r - P.coreRadius) / Math.max(1, P.falloff - P.coreRadius);
+              f = coeff * Math.max(0, 1 - t);
             } else {
-              f = 0;
+              // repulsion: doesn't fall to zero with distance — far cursors
+              // keep pushing their particles apart (1/r near-field + constant floor)
+              const near = Math.min(1, (P.coreRadius * 3) / r);
+              f = coeff * (0.25 + 0.75 * near);
             }
             a.vx += ux * f * dt;
             a.vy += uy * f * dt;
@@ -358,7 +369,7 @@ export default function App() {
           (r) => Array.isArray(r.points) && r.points.length > 1 && r.duration > 0
         );
         recordingsRef.current = recs.map((r) => ({ ...r, _idx: 0 }));
-        playbackStartRef.current = performance.now();
+        tauRef.current = 0;
         particlesRef.current = [];
         syncParticles();
         setRecCount(recordingsRef.current.length);
@@ -423,8 +434,24 @@ export default function App() {
 
         {/* CursorField — right on wide screens */}
         <div style={styles.pane}>
-          <div style={styles.paneHeader}>
-            cursor field · {`click to start/stop`} <span style={{ opacity: 0.5 }}>(touch: hold to record)</span>
+          <div style={{ ...styles.paneHeader, display: "flex", alignItems: "center", gap: 8 }}>
+            <span style={{ flex: 1 }}>
+              cursor field · click to start/stop <span style={{ opacity: 0.5 }}>(touch: hold to record)</span>
+            </span>
+            {[1, 0.5, 0.25, 0.125].map((r) => (
+              <button
+                key={r}
+                onClick={() => setPlaybackRate(r)}
+                style={{
+                  ...styles.btn,
+                  padding: "2px 8px",
+                  borderColor: rate === r ? "#2dd4a8" : "#27473c",
+                  color: rate === r ? "#2dd4a8" : "#cfe8df",
+                }}
+              >
+                {r === 1 ? "1x" : r === 0.5 ? "½x" : r === 0.25 ? "¼x" : "⅛x"}
+              </button>
+            ))}
           </div>
           <canvas ref={cursorCanvasRef} style={{ ...styles.canvas, touchAction: "none", cursor: "crosshair" }} />
         </div>
