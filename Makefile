@@ -1,11 +1,5 @@
 setup-gh-pages: ## Create GitHub repo and enable Pages deployment via Actions
-	@git remote get-url origin > /dev/null 2>&1 \
-		|| gh repo create --public --source=. --remote=origin --push
-	@gh api --method POST /repos/{owner}/{repo}/pages \
-		-f build_type=workflow > /dev/null 2>&1 \
-	|| gh api --method PUT /repos/{owner}/{repo}/pages \
-		-f build_type=workflow > /dev/null
-	@echo "GitHub repo created and Pages enabled via Actions: $$(gh repo view --json url -q .url)"
+	@scripts/setup-gh-pages.sh
 
 # These make tasks allow the default help text to work properly.
 %:
