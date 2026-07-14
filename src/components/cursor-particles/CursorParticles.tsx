@@ -3,7 +3,7 @@ import { DEFAULT_PARAMS } from "../../lib/particle-sim/constants";
 import { drawCursorField, drawParticleField, resizeCanvas } from "../../lib/particle-sim/draw";
 import { buildExportPayload, downloadJSON, parseImportedRecordings } from "../../lib/particle-sim/io";
 import { applyPairwiseForces, computeCoeffMatrix, integrateParticles } from "../../lib/particle-sim/physics";
-import { sampleRecording } from "../../lib/particle-sim/sampleRecording";
+import { pointAtLocalTime, sampleRecording } from "../../lib/particle-sim/sampleRecording";
 import type { LiveRecording, Particle, Params, Recording } from "../../lib/particle-sim/types";
 import { CursorPane } from "./CursorPane";
 import { ParticlePane } from "./ParticlePane";
@@ -32,18 +32,29 @@ export default function CursorParticles() {
   const liveRef = useRef<LiveRecording | null>(null);   // {points, startedAt} while recording
   const tauRef = useRef(0);                             // virtual playback clock (ms), advances at `rate`
   const rateRef = useRef(1);                            // playback rate: 1, 1/2, 1/4, 1/8
+  const syncStartRef = useRef(true);                    // sync all recordings to a shared loop period
   const particlesRef = useRef<Particle[]>([]);          // {x, y, vx, vy} in particle-canvas px
   const paramsRef = useRef<Params>({ ...DEFAULT_PARAMS });
   const pointerRef = useRef({ x: 0.5, y: 0.5, inside: false });
+  const barRefsRef = useRef<(HTMLDivElement | null)[]>([]); // one progress bar per recording, indexed by cursorIdx
 
   // --- UI state ---
   const [recCount, setRecCount] = useState(0);
   const [isRecording, setIsRecording] = useState(false);
   const [params, setParams] = useState<Params>({ ...DEFAULT_PARAMS });
   const [rate, setRate] = useState(1);
+  const [syncStart, setSyncStart] = useState(true);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const setPlaybackRate = (r: number) => { rateRef.current = r; setRate(r); };
+  const setBarRef = useCallback((i: number) => (el: HTMLDivElement | null) => {
+    barRefsRef.current[i] = el;
+  }, []);
+  const setSyncStartTimes = (v: boolean) => {
+    syncStartRef.current = v;
+    tauRef.current = 0; // restart the shared loop clock so the toggle takes visible effect
+    setSyncStart(v);
+  };
 
   const syncParticles = useCallback(() => {
     const canvas = particleCanvasRef.current;
@@ -180,8 +191,29 @@ export default function CursorParticles() {
       tauRef.current += dt * 1000 * rateRef.current;
       const tau = tauRef.current;
 
-      // current cursor positions (normalized)
-      const cursors = recs.map((r) => sampleRecording(r, tau));
+      // shared loop period = longest recording; used both for synced playback
+      // and to time each recording's own progress bar
+      const period = recs.reduce((m, r) => Math.max(m, r.duration), 0);
+      const localT = period > 0 ? tau % period : 0;
+
+      // current cursor positions (normalized). In sync mode, every recording
+      // is timed against the shared period and returns null once its own
+      // (shorter) duration has elapsed — its particles go neutral until the
+      // shared loop restarts.
+      const cursors = syncStartRef.current
+        ? recs.map((r) => pointAtLocalTime(r, localT))
+        : recs.map((r) => sampleRecording(r, tau));
+
+      // per-recording progress bar: fraction of its own duration elapsed this loop
+      recs.forEach((r, i) => {
+        const bar = barRefsRef.current[i];
+        if (!bar) return;
+        const t = syncStartRef.current ? localT : tau % r.duration;
+        const ended = syncStartRef.current && t > r.duration;
+        const frac = r.duration > 0 ? Math.min(1, t / r.duration) : 0;
+        bar.style.width = `${frac * 100}%`;
+        bar.style.opacity = ended ? "0.3" : "1";
+      });
 
       // ---- CursorField ----
       const cc = cursorCanvasRef.current;
@@ -200,7 +232,7 @@ export default function CursorParticles() {
         applyPairwiseForces(parts, coeffM, P, dt);
         integrateParticles(parts, P, dt, w, h);
 
-        drawParticleField(ctx, w, h, parts);
+        drawParticleField(ctx, w, h, parts, cursors);
       }
 
       raf = requestAnimationFrame(frame);
@@ -250,7 +282,15 @@ export default function CursorParticles() {
         <ParticlePane canvasRef={particleCanvasRef} params={params} setParam={setParam} />
 
         {/* CursorField — right on wide screens */}
-        <CursorPane canvasRef={cursorCanvasRef} rate={rate} onSetRate={setPlaybackRate} />
+        <CursorPane
+          canvasRef={cursorCanvasRef}
+          rate={rate}
+          onSetRate={setPlaybackRate}
+          syncStart={syncStart}
+          onSetSyncStart={setSyncStartTimes}
+          recCount={recCount}
+          setBarRef={setBarRef}
+        />
       </div>
 
       <style>{`

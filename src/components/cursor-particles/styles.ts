@@ -29,6 +29,12 @@ export const styles = {
     borderBottom: "1px solid #17241f",
   },
   canvas: { flex: 1, width: "100%", minHeight: 0, display: "block" },
+  progressStack: { display: "flex", flexDirection: "column", gap: 1 },
+  progressTrack: { position: "relative", height: 3, background: "#17241f" },
+  progressBar: {
+    position: "absolute", left: 0, top: 0, bottom: 0, width: "0%",
+    transition: "width 60ms linear, opacity 150ms linear",
+  },
   controls: {
     display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))",
     gap: "6px 16px", padding: "10px 14px", borderTop: "1px solid #17241f",

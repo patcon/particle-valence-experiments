@@ -73,12 +73,20 @@ export function drawCursorField(
   }
 }
 
-export function drawParticleField(ctx: CanvasRenderingContext2D, w: number, h: number, parts: Particle[]) {
+export function drawParticleField(
+  ctx: CanvasRenderingContext2D,
+  w: number,
+  h: number,
+  parts: Particle[],
+  cursors: (Point | null)[] = []
+) {
   ctx.clearRect(0, 0, w, h);
   parts.forEach((p) => {
+    // cursor ended prematurely this loop (synced playback) — go neutral
+    const neutral = cursors[p.cursorIdx] === null;
     ctx.beginPath();
     ctx.arc(p.x, p.y, 6, 0, Math.PI * 2);
-    ctx.fillStyle = colorFor(p.cursorIdx, 0.95);
+    ctx.fillStyle = neutral ? "rgba(180,190,186,0.4)" : colorFor(p.cursorIdx, 0.95);
     ctx.fill();
   });
 }
